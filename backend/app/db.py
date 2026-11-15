@@ -9,7 +9,7 @@ from psycopg_pool import ConnectionPool
 
 
 def create_pool(database_url: str) -> ConnectionPool:
-    # Small pool: Render free tier + Supabase session pooler have tight connection limits.
+    # Small pool: hosted Postgres poolers (e.g. Supabase) have tight connection limits.
     return ConnectionPool(
         database_url,
         min_size=1,

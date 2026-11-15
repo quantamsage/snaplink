@@ -1,4 +1,4 @@
--- Link Shortener schema.
+-- SnapLink schema.
 -- Apply ONCE as the database owner (Supabase SQL editor, or psql as postgres).
 -- The app never runs this file: it connects as the restricted shortener_app role.
 -- After applying, set the app role's password separately (see README):
@@ -23,7 +23,12 @@ create table if not exists shortener_links (
     code       text        not null unique,             -- UNIQUE index makes the redirect lookup by code fast
     target_url text        not null,
     created_at timestamptz not null default now(),
+    -- Optional limits. Once either is reached the link stops redirecting (410 Gone).
+    expires_at timestamptz,
+    max_clicks integer,
     constraint shortener_links_code_format check (code ~ '^[A-Za-z0-9_-]{3,32}$'),
+    constraint shortener_links_max_clicks  check (max_clicks is null or max_clicks between 1 and 1000000),
+    constraint shortener_links_expiry      check (expires_at is null or expires_at > created_at),
     constraint shortener_links_url_scheme  check (target_url ~* '^https?://'),
     constraint shortener_links_url_len     check (char_length(target_url) <= 2048)
 );
@@ -62,6 +67,9 @@ grant usage on schema public to shortener_app;
 -- Only what the app actually does. No UPDATE, no TRUNCATE, no CREATE/DROP.
 grant select, insert         on shortener_users  to shortener_app;
 grant select, insert, delete on shortener_links  to shortener_app;
+-- Only the limits can be changed after creation; code and target_url are fixed.
+-- (UPDATE on a column is also what allows SELECT ... FOR UPDATE in the redirect.)
+grant update (expires_at, max_clicks) on shortener_links to shortener_app;
 grant select, insert         on shortener_clicks to shortener_app;
 -- Identity columns use sequences; inserts need USAGE on them (only our three tables' sequences).
 grant usage on sequence shortener_users_id_seq, shortener_links_id_seq, shortener_clicks_id_seq to shortener_app;
