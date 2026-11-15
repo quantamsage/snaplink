@@ -20,7 +20,7 @@ export default function Header() {
     <header className="site-header">
       <Link href="/" className="wordmark">
         <span aria-hidden="true" className="wordmark-mark">/r/</span>
-        Link Shortener
+        SnapLink
       </Link>
       {signedIn && (
         <button type="button" className="btn-quiet" onClick={signOut}>
