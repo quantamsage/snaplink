@@ -1,8 +1,10 @@
-# Link Shortener with Click Analytics
+# SnapLink
+
+![Tests](https://github.com/quantamsage/snaplink/actions/workflows/tests.yml/badge.svg)
+
+A link shortener with click analytics, expiring links and QR codes.
 
 Turns long URLs into short links and counts every click. Users sign in, create and manage their own links, and see a per-link stats page with daily clicks and top referrers. The backend handles the redirect itself, so every click is recorded in the database before the visitor is sent on.
-
-(The API runs on Render's free tier and sleeps when idle: the first request can take ~50 seconds.)
 
 ## Features
 
@@ -11,6 +13,9 @@ Turns long URLs into short links and counts every click. Users sign in, create a
 - Public redirect at `/r/{code}` that records the click, then redirects with HTTP 302
 - Dashboard of your links with live click counts, copy and delete
 - Stats page: all-time total, clicks per day (7 / 30 / 90 days, zero days included) and top 5 referrers
+- **Expiring links:** set a date and time after which a link stops working, a maximum number of clicks, or both. Change or remove the limits at any time. A stopped link returns **410 Gone**, doesn't count the visit, and shows visitors a small "this link has expired" page instead of JSON.
+- **Safe under load:** a link with a click limit is row-locked while its clicks are counted, so two people clicking at the same moment can't both use the last click (there's a test that fires two simultaneous clicks).
+- **QR codes:** every link has a QR code (preview, PNG or SVG download). It encodes the short URL, not the target, so scans are counted like clicks.
 - Users can only see and change their own links (others' links return 404)
 - API contract in `docs/openapi.yaml`, enforced by a test
 
@@ -26,10 +31,9 @@ Turns long URLs into short links and counts every click. Users sign in, create a
 
 ## Tech stack
 
-- **Backend:** Python 3.12, FastAPI, Pydantic v2, psycopg 3 (connection pool), PyJWT, argon2-cffi
+- **Backend:** Python 3.12, FastAPI, Pydantic v2, psycopg 3 (connection pool), PyJWT, argon2-cffi, segno (QR codes)
 - **Frontend:** Next.js 16 (App Router), React 19, TypeScript, plain CSS
-- **Database:** PostgreSQL 16 (Supabase), tables prefixed `shortener_`
-- **Hosting:** Render (backend, Frankfurt) · Vercel (frontend) · Supabase (database)
+- **Database:** PostgreSQL 16 (also works on Supabase), tables prefixed `shortener_`
 - **Testing:** pytest against a real Postgres database; GitHub Actions CI
 
 ## Architecture
@@ -38,16 +42,16 @@ Turns long URLs into short links and counts every click. Users sign in, create a
 flowchart LR
     B[Browser]
     V[Visitor clicking a short link]
-    FE["Next.js frontend<br/>(Vercel)"]
-    API["FastAPI backend<br/>(Render)"]
-    DB[("PostgreSQL<br/>(Supabase)")]
+    FE["Next.js frontend"]
+    API["FastAPI backend"]
+    DB[("PostgreSQL")]
     T[Target website]
 
     B -- "loads pages" --> FE
     B -- "JSON over HTTPS<br/>Authorization: Bearer JWT" --> API
     V -- "GET /r/{code}" --> API
     API -- "302 Location" --> T
-    API -- "parameterised SQL<br/>as role shortener_app<br/>(Session pooler)" --> DB
+    API -- "parameterised SQL<br/>as role shortener_app" --> DB
 ```
 
 The frontend never talks to the database. It only renders pages and calls the API. All state lives in Postgres; all validation, ownership checks and counting happen in the backend.
@@ -70,7 +74,7 @@ The frontend never talks to the database. It only renders pages and calls the AP
 
 The access token is kept in `sessionStorage`. The options and why:
 
-- **httpOnly cookie:** JavaScript can't read it, so XSS can't steal it. But the frontend (vercel.app) and API (onrender.com) are different sites, so it would be a third-party cookie, which browsers increasingly block, and it brings CSRF protection into play. Worth it with a custom domain for both.
+- **httpOnly cookie:** JavaScript can't read it, so XSS can't steal it. But when the frontend and API are on different sites it would be a third-party cookie, which browsers increasingly block, and it brings CSRF protection into play. Worth it with a custom domain for both.
 - **localStorage:** survives restarts, but any XSS can read it, and it lingers for a long time.
 - **Memory only:** safest against persistence, but every refresh signs you out.
 - **sessionStorage (chosen):** survives a refresh, cleared when the tab closes. Still readable by XSS, so the risk is reduced with a short token lifetime (30 min), a strict Content-Security-Policy, React's output escaping, and no `dangerouslySetInnerHTML`.
@@ -78,7 +82,7 @@ The access token is kept in `sessionStorage`. The options and why:
 ## Project structure
 
 ```
-link-shortener/
+snaplink/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py          # app factory: middleware, CORS, headers, routes
@@ -91,34 +95,32 @@ link-shortener/
 │   │   ├── codes.py         # short-code generation, referrer parsing
 │   │   ├── deps.py          # DB connection + current user dependencies
 │   │   └── routers/         # auth.py, links.py, redirect.py
-│   ├── tests/               # 65 tests (unit, contract, real-Postgres API tests)
+│   ├── tests/               # 79 tests (unit, contract, real-Postgres API tests)
 │   ├── requirements.txt / requirements-dev.txt
 │   └── .env.example
 ├── frontend/
 │   ├── app/                 # pages: dashboard, login, register, links/[id] (stats)
-│   ├── components/          # Header, AuthForm, CopyButton
-│   ├── lib/                 # api.ts (only backend client), auth.ts, useRequireAuth.ts
+│   ├── components/          # Header, AuthForm, CopyButton, LinkLimitsPanel, QrPanel
+│   ├── lib/                 # api.ts (only backend client), auth.ts, limits.ts, useRequireAuth.ts
 │   ├── next.config.ts       # Content-Security-Policy + security headers
 │   └── .env.example
 ├── db/schema.sql            # tables, indexes, constraints, app role, RLS
 ├── docs/openapi.yaml        # the API contract
 ├── .github/workflows/tests.yml
-├── render.yaml              # Render blueprint (backend)
 └── README.md
 ```
 
 ## Setup (Windows / PowerShell)
 
-### 1. Database (Supabase)
+### 1. Database (local PostgreSQL)
 
-1. In your Supabase project, open **SQL Editor**, paste `db/schema.sql` and run it.
-2. Set the app role's password (generate a long random one, keep it out of the repo):
-   ```sql
-   alter role shortener_app with login password '<long-random-password>';
-   ```
-3. **Settings → Data API:** make sure the Data API is off (the backend connects directly).
-4. **Connect → Session pooler:** copy the string, then change the user to the app role:
-   `postgresql://shortener_app.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres`
+```powershell
+psql -U postgres -c "CREATE DATABASE shortener_dev"
+psql -U postgres -d shortener_dev -f db\schema.sql
+psql -U postgres -c "ALTER ROLE shortener_app WITH LOGIN PASSWORD '<choose-a-password>'"
+```
+
+In `backend/.env`, set `DATABASE_URL=postgresql://shortener_app:<that-password>@localhost:5432/shortener_dev` and `PUBLIC_BASE_URL=http://localhost:8000` (short links and QR codes point there).
 
 ### 2. Backend
 
@@ -153,7 +155,7 @@ cd backend
 python -m pytest -q
 ```
 
-Without test database variables, 13 unit and contract tests run and 52 database tests are **skipped**. The full suite runs on every push in GitHub Actions (Postgres 16 container). To run it locally you need a disposable Postgres (local install or `docker run -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16`), with `db/schema.sql` applied, then:
+Without test database variables, 13 unit and contract tests run and 66 database tests are **skipped**. The full suite runs on every push in GitHub Actions (Postgres 16 container). To run it locally you need a disposable Postgres (local install or `docker run -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16`), with `db/schema.sql` applied, then:
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql://shortener_app:<pw>@localhost:5432/shortener_test"
@@ -161,34 +163,25 @@ $env:TEST_ADMIN_DATABASE_URL = "postgresql://postgres:<pw>@localhost:5432/shorte
 python -m pytest -q
 ```
 
-> ⚠️ The tests **wipe the shortener tables** before each test. Never point them at your real Supabase database.
-
-## Deployment
-
-**Backend (Render):** New → Blueprint → select this repo (uses `render.yaml`, region Frankfurt). Set:
-`DATABASE_URL` (Session pooler string as `shortener_app`), `PUBLIC_BASE_URL` (the Render URL, e.g. `https://link-shortener-api.onrender.com`), `CORS_ORIGINS` (your Vercel URL, no trailing slash). `JWT_SECRET` is generated by Render.
-
-**Frontend (Vercel):** import the repo, set **Root Directory** to `frontend`, add `NEXT_PUBLIC_API_URL` = your Render URL, deploy. It's baked in at build time, so redeploy after changing it.
-
-Then put the final Vercel URL in Render's `CORS_ORIGINS` and redeploy the backend.
+> ⚠️ The tests **wipe the shortener tables** before each test. Never point them at a database you care about.
 
 ## How it works
 
 1. **Sign up / sign in.** The backend hashes the password with Argon2id. Login returns a JWT (`sub` = user id, `exp` = 30 min). The frontend sends it as `Authorization: Bearer …`.
 2. **Create a link.** The backend validates the URL (http/https only, ≤ 2048 chars) and the optional custom code, then inserts it. Random codes come from `secrets` (62⁷ ≈ 3.5 trillion options); on the rare collision it retries.
 3. **Someone clicks.** `GET /r/{code}` looks up the code (unique index), inserts a row into `shortener_clicks` with the time and the referrer's **host only**, then returns a **302** with `Cache-Control: no-store`. A 301 would be cached by browsers and later clicks would never reach the server.
-4. **Stats.** One SQL query uses `generate_series` to build every day in the window (so zero-click days still appear), left-joined to the click counts. Another groups by referrer host.
+4. **Limits.** Before redirecting, the backend checks `expires_at` and counts clicks against `max_clicks`. For a link with a click limit it first locks the link row (`SELECT … FOR UPDATE`), so simultaneous clicks are counted one at a time. A stopped link answers **410** without recording a click; browsers get an HTML page, API clients the JSON error. The app's database role can update only `expires_at` and `max_clicks`, never the code or target.
+5. **QR codes.** `GET /api/links/{id}/qr?format=svg|png` builds the image with segno from the short URL. The frontend fetches it with the token and shows it from a `blob:` URL (allowed by the CSP).
+6. **Stats.** One SQL query uses `generate_series` to build every day in the window (so zero-click days still appear), left-joined to the click counts. Another groups by referrer host.
 
 ## Limitations
 
-- Short links live on the API domain (`…onrender.com/r/abc1234`), so they aren't very short without a custom domain.
-- Free Render instances sleep: the first click after idle time takes ~50 seconds to redirect.
+- Short links live on the API's address (`localhost:8000/r/abc1234` when run locally), so they're only truly short behind a short custom domain.
 - No rate limiting, so someone could create many links or inflate click counts. Bots and link-preview crawlers (Slack, WhatsApp) also count as clicks.
 - Any http/https URL is accepted. There's no malware/phishing check, so it could be abused to disguise harmful links.
 - No refresh tokens: you're signed out after 30 minutes or when the tab closes.
-- A missing short link returns a JSON 404 rather than a friendly web page.
+- Expiry times are entered in the viewer's local time and stored in UTC; there's no time-zone picker.
 - Click counts use `count(*)` per request; fine at portfolio scale, would need a counter or rollup table at high volume.
-- The free Supabase project pauses after about a week of inactivity; the demo fails until it's restored from the dashboard.
 
 ## Future improvements
 
@@ -196,8 +189,8 @@ Then put the final Vercel URL in Render's `CORS_ORIGINS` and redeploy the backen
 - Bot filtering (user-agent rules) and unique-visitor counts
 - Custom short domain, with httpOnly-cookie auth on the same site
 - Safe Browsing check on target URLs
-- QR codes, link expiry, editing target URLs
-- Friendly HTML 404 page for unknown codes
+- Editing target URLs (with a history of changes)
+- Password-protected links
 
 ## License
 
