@@ -31,7 +31,7 @@ def _validation_message(exc: RequestValidationError) -> str:
     return f"{field}: {msg}" if field else msg
 
 
-_STATUS_CODES = {401: "unauthorized", 404: "not_found", 405: "method_not_allowed", 409: "conflict"}
+_STATUS_CODES = {401: "unauthorized", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone"}
 
 
 def register_error_handlers(app: FastAPI) -> None:

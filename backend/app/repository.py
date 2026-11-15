@@ -34,16 +34,32 @@ def get_user_by_id(conn: Connection, user_id: int) -> dict | None:
 # ---------- Links ----------
 
 _LINK_COLUMNS = """
-    l.id, l.code, l.target_url, l.created_at,
+    l.id, l.code, l.target_url, l.created_at, l.expires_at, l.max_clicks,
     (select count(*) from shortener_clicks c where c.link_id = l.id) as click_count
 """
+
+# Why a link has stopped working, or None if it still redirects. Expiry wins
+# over the click limit when both apply. Used for the API and the redirect alike.
+def inactive_reason(link: dict, now) -> str | None:
+    if link["expires_at"] is not None and link["expires_at"] <= now:
+        return "expired"
+    if link["max_clicks"] is not None and link["click_count"] >= link["max_clicks"]:
+        return "click_limit"
+    return None
 
 
 class CodeTaken(Exception):
     pass
 
 
-def create_link(conn: Connection, user_id: int, target_url: str, custom_code: str | None) -> dict:
+def create_link(
+    conn: Connection,
+    user_id: int,
+    target_url: str,
+    custom_code: str | None,
+    expires_at=None,
+    max_clicks: int | None = None,
+) -> dict:
     """Insert a link. Custom code taken -> CodeTaken. Random code collision -> retry."""
     attempts = 1 if custom_code else 5
     for _ in range(attempts):
@@ -51,8 +67,9 @@ def create_link(conn: Connection, user_id: int, target_url: str, custom_code: st
         try:
             with conn.transaction():
                 row = conn.execute(
-                    "insert into shortener_links (user_id, code, target_url) values (%s, %s, %s) returning id",
-                    (user_id, code, target_url),
+                    "insert into shortener_links (user_id, code, target_url, expires_at, max_clicks) "
+                    "values (%s, %s, %s, %s, %s) returning id",
+                    (user_id, code, target_url, expires_at, max_clicks),
                 ).fetchone()
             return get_link(conn, user_id, row["id"])
         except errors.UniqueViolation:
@@ -79,6 +96,21 @@ def get_link(conn: Connection, user_id: int, link_id: int) -> dict | None:
     ).fetchone()
 
 
+def update_limits(conn: Connection, user_id: int, link_id: int, changes: dict) -> dict | None:
+    """changes holds only the fields the client sent; None means "remove this limit"."""
+    row = conn.execute(
+        """update shortener_links
+           set expires_at = case when %(set_expiry)s then %(expires_at)s else expires_at end,
+               max_clicks = case when %(set_max)s then %(max_clicks)s else max_clicks end
+           where id = %(id)s and user_id = %(user_id)s
+           returning id""",
+        {"id": link_id, "user_id": user_id,
+         "set_expiry": "expires_at" in changes, "expires_at": changes.get("expires_at"),
+         "set_max": "max_clicks" in changes, "max_clicks": changes.get("max_clicks")},
+    ).fetchone()
+    return None if row is None else get_link(conn, user_id, link_id)
+
+
 def delete_link(conn: Connection, user_id: int, link_id: int) -> bool:
     row = conn.execute(
         "delete from shortener_links where id = %s and user_id = %s returning id", (link_id, user_id)
@@ -88,16 +120,38 @@ def delete_link(conn: Connection, user_id: int, link_id: int) -> bool:
 
 # ---------- Redirect + clicks ----------
 
-def find_target_and_record_click(conn: Connection, code: str, referrer: str | None) -> str | None:
+def follow(conn: Connection, code: str, referrer: str | None) -> tuple[str, str | None]:
+    """Look up a code and count the click if the link still works.
+
+    Returns ("ok", target_url), ("missing", None), ("expired", None) or ("click_limit", None).
+    A link with a click limit is locked (FOR UPDATE) while its clicks are counted, so
+    two people clicking at once can't both use the last allowed click.
+    """
     link = conn.execute(
-        "select id, target_url from shortener_links where code = %s", (code,)
+        "select id, max_clicks from shortener_links where code = %s", (code,)
     ).fetchone()
     if link is None:
-        return None
+        return "missing", None
+
+    lock = " for update" if link["max_clicks"] is not None else ""
+    link = conn.execute(
+        f"select id, target_url, expires_at, max_clicks, now() as now from shortener_links where id = %s{lock}",
+        (link["id"],),
+    ).fetchone()
+    if link is None:  # deleted between the two queries
+        return "missing", None
+    # Counted after taking the lock, so concurrent clicks see each other's inserts.
+    link["click_count"] = conn.execute(
+        "select count(*) as n from shortener_clicks where link_id = %s", (link["id"],)
+    ).fetchone()["n"]
+
+    reason = inactive_reason(link, link["now"])
+    if reason is not None:
+        return reason, None
     conn.execute(
         "insert into shortener_clicks (link_id, referrer_host) values (%s, %s)", (link["id"], referrer)
     )
-    return link["target_url"]
+    return "ok", link["target_url"]
 
 
 # ---------- Stats ----------
