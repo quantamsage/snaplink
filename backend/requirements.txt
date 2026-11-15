@@ -5,3 +5,4 @@ psycopg-pool==3.3.3
 PyJWT==2.15.1
 argon2-cffi==25.1.0
 email-validator==2.3.0
+segno==1.6.6

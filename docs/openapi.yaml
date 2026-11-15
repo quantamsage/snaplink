@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: Link Shortener API
-  version: 1.0.0
+  title: SnapLink API
+  version: 1.1.0
   description: |
     Shortens URLs and records clicks. All responses are JSON, except the redirect
     endpoint, which answers with an HTTP 302 and a Location header.
@@ -31,7 +31,7 @@ components:
             code:
               type: string
               description: Stable, machine-readable code.
-              enum: [validation_error, unauthorized, not_found, conflict, internal_error, method_not_allowed]
+              enum: [validation_error, unauthorized, not_found, conflict, gone, internal_error, method_not_allowed]
             message:
               type: string
               description: Human-readable message, safe to show to users.
@@ -74,10 +74,28 @@ components:
           type: [string, "null"]
           pattern: '^[A-Za-z0-9_-]{3,32}$'
           description: Optional. If omitted, a random 7-character code is generated.
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: Optional. Must be in the future and include a timezone. After it, the link returns 410.
+        max_clicks:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 1000000
+          description: Optional. After this many clicks, the link returns 410.
+
+    LinkUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Change a link's limits. Send null to remove a limit. The code and target can't change.
+      properties:
+        expires_at: { type: [string, "null"], format: date-time }
+        max_clicks: { type: [integer, "null"], minimum: 1, maximum: 1000000 }
 
     Link:
       type: object
-      required: [id, code, short_url, target_url, created_at, click_count]
+      required: [id, code, short_url, target_url, created_at, click_count, expires_at, max_clicks, active, inactive_reason]
       properties:
         id: { type: integer }
         code: { type: string }
@@ -85,6 +103,10 @@ components:
         target_url: { type: string }
         created_at: { type: string, format: date-time }
         click_count: { type: integer, minimum: 0 }
+        expires_at: { type: [string, "null"], format: date-time }
+        max_clicks: { type: [integer, "null"] }
+        active: { type: boolean, description: False once the link has expired or used all its clicks. }
+        inactive_reason: { type: [string, "null"], enum: [expired, click_limit, null] }
 
     LinkList:
       type: object
@@ -236,11 +258,42 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+    patch:
+      summary: Change or remove a link's expiry date and click limit
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LinkUpdate' } } }
+      responses:
+        '200':
+          description: The updated link.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Link' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       summary: Delete one of the caller's links (and its clicks)
       security: [{ bearerAuth: [] }]
       responses:
         '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/links/{link_id}/qr:
+    parameters: [{ $ref: '#/components/parameters/LinkId' }]
+    get:
+      summary: Download a QR code for the short URL
+      description: Encodes the short URL (not the target), so every scan is counted as a click.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: format, in: query, required: false, schema: { type: string, enum: [svg, png], default: svg } }
+      responses:
+        '200':
+          description: The QR code image, as an attachment.
+          content:
+            image/svg+xml: { schema: { type: string } }
+            image/png: { schema: { type: string, format: binary } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -263,7 +316,10 @@ paths:
   /r/{code}:
     get:
       summary: Follow a short link (public)
-      description: Records a click, then redirects. Uses 302 (not 301) so browsers don't cache it and every click reaches the server.
+      description: |
+        Records a click, then redirects. Uses 302 (not 301) so browsers don't cache it and every click reaches the server.
+        Expired links and links that used all their clicks return 410 and don't count a click.
+        Browsers (Accept: text/html) get a small HTML page for 404 and 410; other clients get the JSON error.
       parameters:
         - { name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{3,32}$' } }
       responses:
@@ -272,4 +328,7 @@ paths:
           headers:
             Location: { schema: { type: string } }
         '404': { $ref: '#/components/responses/NotFound' }
+        '410':
+          description: The link has expired or reached its click limit (error code "gone").
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         '422': { $ref: '#/components/responses/ValidationError' }
