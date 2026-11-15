@@ -3,6 +3,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { api, ApiError, type Link as ShortLink } from "@/lib/api";
+import { limitSummary, localInputToIso } from "@/lib/limits";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 
 function message(err: unknown): string {
@@ -16,6 +17,8 @@ export default function Dashboard() {
 
   const [url, setUrl] = useState("");
   const [customCode, setCustomCode] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [maxClicks, setMaxClicks] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [justCreated, setJustCreated] = useState<number | null>(null);
@@ -38,9 +41,14 @@ export default function Dashboard() {
     setFormError(null);
     setBusy(true);
     try {
-      const link = await api.createLink(url.trim(), customCode.trim() || null);
+      const link = await api.createLink(url.trim(), customCode.trim() || null, {
+        expires_at: localInputToIso(expiresAt),
+        max_clicks: maxClicks ? Number(maxClicks) : null,
+      });
       setUrl("");
       setCustomCode("");
+      setExpiresAt("");
+      setMaxClicks("");
       setJustCreated(link.id);
       await load();
     } catch (err) {
@@ -91,6 +99,20 @@ export default function Dashboard() {
           <button type="submit" className="btn" disabled={busy}>
             {busy ? "Shortening…" : "Shorten"}
           </button>
+          <details className="limits" open={Boolean(expiresAt || maxClicks)}>
+            <summary>Limits (optional)</summary>
+            <div className="limits-fields">
+              <label>
+                Stop working after
+                <input type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+              </label>
+              <label>
+                Max clicks
+                <input type="number" min={1} max={1000000} inputMode="numeric" placeholder="No limit"
+                  value={maxClicks} onChange={(e) => setMaxClicks(e.target.value)} />
+              </label>
+            </div>
+          </details>
         </form>
         {formError && <p role="alert" className="error">{formError}</p>}
       </section>
@@ -106,13 +128,17 @@ export default function Dashboard() {
         {links?.length === 0 && <p className="muted">No links yet. Paste a long URL above to make your first one.</p>}
         {links && links.length > 0 && (
           <ul className="links">
-            {links.map((link) => (
-              <li key={link.id} className={link.id === justCreated ? "link-row is-new" : "link-row"}>
+            {links.map((link) => {
+              const summary = limitSummary(link);
+              const classes = ["link-row", link.id === justCreated && "is-new", !link.active && "is-off"];
+              return (
+              <li key={link.id} className={classes.filter(Boolean).join(" ")}>
                 <div className="link-main">
                   <a className="code" href={link.short_url} target="_blank" rel="noopener noreferrer">
                     /r/{link.code}
                   </a>
                   <span className="target" title={link.target_url}>{link.target_url}</span>
+                  {summary && <span className={`limit limit-${summary.tone}`}>{summary.text}</span>}
                 </div>
                 <div className="tally" aria-label={`${link.click_count} clicks`}>
                   <span className="tally-n">{link.click_count}</span>
@@ -124,7 +150,8 @@ export default function Dashboard() {
                   <button type="button" className="btn-quiet danger" onClick={() => onDelete(link)}>Delete</button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>

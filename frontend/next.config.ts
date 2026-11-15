@@ -11,7 +11,7 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  "img-src 'self' data: blob:", // blob: for the QR preview, fetched with the token
   "font-src 'self'",
   `connect-src 'self' ${apiOrigin}`,
   "object-src 'none'",

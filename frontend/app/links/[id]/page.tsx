@@ -3,6 +3,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import LinkLimitsPanel from "@/components/LinkLimitsPanel";
+import QrPanel from "@/components/QrPanel";
 import { api, ApiError, type Link as ShortLink, type LinkStats } from "@/lib/api";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 
@@ -54,6 +56,11 @@ export default function StatsPage() {
         </div>
         <CopyButton text={link.short_url} />
       </header>
+
+      <div className="panels">
+        <LinkLimitsPanel link={link} onSaved={setLink} />
+        <QrPanel link={link} />
+      </div>
 
       <p className="totals">
         <strong>{stats.total_clicks}</strong> clicks all time, <strong>{stats.window_clicks}</strong> in the last {stats.days} days.
