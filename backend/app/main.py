@@ -25,7 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         app.state.pool.close()
 
-    app = FastAPI(title="Link Shortener API", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="SnapLink API", version="1.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.pool = create_pool(settings.database_url)
 
