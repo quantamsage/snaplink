@@ -120,3 +120,27 @@ a.code:hover { color: var(--accent); }
   .code-xl { font-size: 1.6rem; }
 }
 @media (prefers-reduced-motion: reduce) { .link-row.is-new { animation: none; } }
+
+/* Limits and QR */
+.limits { flex: 1 1 100%; }
+.limits summary { cursor: pointer; color: var(--ink-soft); font-size: 0.9375rem; font-weight: 600; width: fit-content; }
+.limits-fields { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; margin-top: 0.75rem; }
+.limits-fields label { flex: 0 1 230px; }
+.limit { font-size: 0.8125rem; margin-top: 0.25rem; color: var(--ink-soft); }
+.limit-warn { color: #9a5b00; font-weight: 600; }
+.limit-off { color: var(--danger); font-weight: 600; }
+.link-row.is-off .code { color: var(--ink-soft); text-decoration: line-through; text-decoration-thickness: 2px; }
+.link-row.is-off .tally-n { color: var(--ink-soft); }
+.status-off { color: var(--danger); font-weight: 600; }
+.saved { color: #1f7a45; font-weight: 600; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 1.25rem; }
+.panel h2 { margin-top: 0; }
+.qr-panel { display: flex; gap: 1rem; justify-content: space-between; align-items: flex-start; }
+.qr-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+/* min-width: 0 lets the text column shrink, so a long short-URL wraps instead of pushing the QR out. */
+.qr-text { min-width: 0; overflow-wrap: anywhere; }
+.qr-image { flex: none; background: #fff; border: 1px solid var(--rule); border-radius: var(--radius-s); }
+@media (max-width: 640px) {
+  .qr-panel { flex-direction: column-reverse; }
+}
